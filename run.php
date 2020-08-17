@@ -47,6 +47,19 @@ function getCredentials($userOnly = false) {
     return $data['user'] . ':' . $data['token'];
 }
 
+$lastRequestTS = 0;
+function waitUntilCanFetch() {
+    // https://developer.github.com/v3/#rate-limiting
+    // - authentacted users can make 5,000 requests per hour
+    // - wait 1 second between requests (max of 3,600 per hour)
+    global $lastRequestTS;
+    $ts = time();
+    if ($ts == $lastRequestTS) {
+        sleep(1);
+    }
+    $lastRequestTS = $ts;
+}
+
 function fetchRest($remotePath, $account, $repo, $extra) {
     $remoteBase = 'https://api.github.com';
     $remotePath = str_replace($remoteBase, '', $remotePath);
@@ -83,16 +96,32 @@ function fetchRest($remotePath, $account, $repo, $extra) {
     return $json;
 }
 
+function accountCounts() {
+    // one-off function
+    $json = getComposerLockJson();
+    $accounts = [];
+    foreach ($json->packages as $package) {
+        $b = preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $package->name, $m);
+        array_shift($m);
+        list($account, $repo) = $m;
+        $accounts[$account] ?? 0;
+        $accounts[$account]++;
+    }
+    asort($accounts);
+    $accounts = array_reverse($accounts);
+    print_r($accounts);
+}
+
 function getComposerLockJson() {
     $s = file_get_contents('cwp-recipe-kitchen-sink/composer.lock');
     $json = json_decode($s);
     return $json;
 }
 
-function filterSupportedModules($json) {
+function filterSupportedModules($composerLockJson) {
     global $supportedAccounts;
     $modules = [];
-    foreach ($json->packages as $package) {
+    foreach ($composerLockJson->packages as $package) {
         $b = preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $package->name, $m);
         array_shift($m);
         list($account, $repo) = $m;
@@ -123,71 +152,94 @@ function createCsv($filename, $data, $fields, $maxN = 9999) {
     echo "\nWrote to $filename\n\n";
 }
 
-function deriveData($json) {
+function getLatestPatchTag($gitTagsJson, $currentTag) {
+    $rx = '#^([0-9]+)\.([0-9]+)\.([0-9]+)$#';
+    if (!preg_match($rx, $currentTag, $m)) {
+        return 'unknown_current';
+    }
+    array_shift($m);
+    list($currentMajor, $currentMinor, $currentPatch) = $m;
+    // releases are listed DESC
+    foreach ($gitTagsJson as $tag) {
+        $name = $tag->name;
+        if (!preg_match($rx, $currentTag, $m)) {
+            continue;
+        }
+        array_shift($m);
+        list($latestMajor, $latestMinor, $latestPatch) = $m;
+        if ($currentMajor == $latestMajor && $currentMinor == $latestMinor) {
+            return "$latestMajor.$latestMinor.$latestPatch";
+        }
+    }
+    return 'unknown_latest_patch';
+}
+
+function deriveEndpointUrl($name) {
+    preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $name, $m);
+    array_shift($m);
+    list($account, $repo) = $m;
+    if ($account == 'silverstripe') {
+        if (strpos($repo, 'recipe') !== 0 && $repo != 'comment-notifications' && $repo != 'vendor-plugin') {
+            $repo = 'silverstripe-' . $repo;
+        }
+    }
+    if ($account == 'cwp') {
+        $account = 'silverstripe';
+        if (strpos($repo, 'cwp') !== 0) {
+            $repo = 'cwp-' . $repo;
+        }
+        if ($repo == 'cwp-agency-extensions') {
+            $repo = 'cwp-agencyextensions';
+        }
+    }
+    $url = "/repos/$account/$repo/tags";
+    return $url;
+    // /repos/silverstripe/silverstripe-comment-notifications/tags?per_page=100
+    // /repos/silverstripe/silverstripe-vendor-plugin/tags?per_page=100
+    // /repos/symbiote/silverstripe-multivaluefield/tags?per_page=100
+    // /repos/tractorcow/classproxy/tags?per_page=100
+}
+
+function deriveData() {
     global $updateOnlyModules;
-    $modules = filterSupportedModules($json);
+    $composerLockJson = getComposerLockJson();
+    $modules = filterSupportedModules($composerLockJson);
     $data = [];
     foreach ($modules as $module) {
+        preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $module->name, $m);
+        array_shift($m);
+        list($account, $repo) = $m;
+        if ($account == 'cwp') {
+            $account = 'silverstripe';
+        }
+        $url = deriveEndpointUrl($module->name);
+        $gitTagsJson = fetchRest($url, $account, $repo, 'tags');
         $data[] = [
             'name' => $module->name,
-            'current_version' => $module->version,
+            'current_tag' => $module->version,
+            'latest_patch_tag' => getLatestPatchTag($gitTagsJson, $module->version),
             'upgrade_only' => in_array($module->name, $updateOnlyModules),
-            'release_url' => str_replace('.git', '', $module->source->url) . '/releases'
+            'tags_url' => str_replace('.git', '', $module->source->url) . '/tags'
         ];
     }
     return $data;
 }
 
-function accountCounts() {
-    $json = getComposerLockJson();
-    $accounts = [];
-    foreach ($json->packages as $package) {
-        $b = preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $package->name, $m);
-        array_shift($m);
-        list($account, $repo) = $m;
-        $accounts[$account] ?? 0;
-        $accounts[$account]++;
-    }
-    asort($accounts);
-    $accounts = array_reverse($accounts);
-    print_r($accounts);
-}
-
 function buildModulesCsv() {
-    if (!file_exists('csv')) {
-        mkdir('csv');
+    foreach (['csv', 'json'] as $dir) {
+        if (!file_exists($dir)) {
+            mkdir($dir);
+        }
     }
-    $json = getComposerLockJson();
-    $data = deriveData($json);
-    createCsv('csvs/modules.csv', $data, [
+    $data = deriveData();
+    createCsv('csv/modules.csv', $data, [
         'name',
-        'current_version',
-        'release_url'
+        'current_tag',
+        'latest_patch_tag',
+        'upgrade_only',
+        'tags_url'
     ]);
 }
 
-function getLatestVersionFromGithub() {
-    if (!file_exists('json')) {
-        mkdir('json');
-    }
-    $json = getComposerLockJson();
-    $data = deriveData($json);
-    foreach ($data as $row) {        
-        $name = $row['name'];
-        preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $name, $m);
-        array_shift($m);
-        list($account, $repo) = $m;
-        $upgradeOnly = $row['upgrade_only'];
-        $currentVersion = $row['current_version'];
-        $releaseUrl = $row['release_url'];
-
-        $url = "/repos/$account/$repo/releases";
-        $data = fetchRest($url, $account, $repo, 'issues-open');
-
-        //$s = file_get_contents($releaseUrl);
-        sleep(1);
-    }
-}
-
 // accountCounts();
-//buildModulesCsv();
+buildModulesCsv();
