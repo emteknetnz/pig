@@ -11,7 +11,7 @@ $supportedAccounts = [
 ];
 
 // We can adopt new tags for these but don't create new tags for them:
-$updateOnlyModules = [
+$upgradeOnlyModules = [
     'silverstripe/recipe-core',
     'silverstripe/recipe-cms',
     'symbiote/silverstripe-queuedjobs',
@@ -229,7 +229,7 @@ function deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha) {
 }
 
 function deriveData() {
-    global $updateOnlyModules, $useLocalData;
+    global $upgradeOnlyModules, $useLocalData;
     $composerLockJson = getComposerLockJson();
     $modules = filterModules($composerLockJson);
     $data = [];
@@ -259,22 +259,27 @@ function deriveData() {
         // current = 1.6.0
         // latest = 1.6.1
         // unreleased = probably
-        $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
-        $newPatchTag = 'unknown_new_patch_tag';
-        if (preg_match('#([0-9]+\.[0-9]+)\.[0-9]+#', $latestPatchTag, $m)) {
-            $branch = $m[1];
-            if (preg_match('#^0\.#', $branch)) {
-                $branch = 'master';
+        $upgradeOnly = in_array($module->name, $upgradeOnlyModules);
+        $hasUnreleasedChanges = '';
+        $newPatchTag = '';
+        if (!$upgradeOnly) {
+            $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
+            $newPatchTag = 'unknown_new_patch_tag';
+            if (preg_match('#([0-9]+\.[0-9]+)\.[0-9]+#', $latestPatchTag, $m)) {
+                $branch = $m[1];
+                if (preg_match('#^0\.#', $branch)) {
+                    $branch = 'master';
+                }
+                $path = "json/rest-$account-$repo-branches-$branch.json";
+                if ($useLocalData && file_exists($path)) {
+                    echo "Using local data from $path\n";
+                    $gitBranchJson = json_decode(file_get_contents($path));
+                } else {
+                    $url = deriveEndpointUrl($module->name, "branches/$branch");
+                    $gitBranchJson = fetchRest($url, $account, $repo, "branches-$branch");
+                }
+                list($hasUnreleasedChanges, $newPatchTag) = deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha);
             }
-            $path = "json/rest-$account-$repo-branches-$branch.json";
-            if ($useLocalData && file_exists($path)) {
-                echo "Using local data from $path\n";
-                $gitBranchJson = json_decode(file_get_contents($path));
-            } else {
-                $url = deriveEndpointUrl($module->name, "branches/$branch");
-                $gitBranchJson = fetchRest($url, $account, $repo, "branches-$branch");
-            }
-            list($hasUnreleasedChanges, $newPatchTag) = deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha);
         }
 
         // data row
@@ -282,9 +287,9 @@ function deriveData() {
             'name' => $module->name,
             'current_tag' => $module->version,
             'latest_patch_tag' => $latestPatchTag,
+            'upgrade_only' => $upgradeOnly,
             'has_unreleased_changes' => $hasUnreleasedChanges,
             'new_patch_tag' => $newPatchTag,
-            'upgrade_only' => in_array($module->name, $updateOnlyModules),
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags'
         ];
     }
