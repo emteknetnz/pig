@@ -17,6 +17,12 @@ $updateOnlyModules = [
     'symbiote/silverstripe-queuedjobs',
 ];
 
+// not relevant for doing a release
+$skipRepos = [
+    'vendor-plugin',
+    'recipe-plugin',
+];
+
 /**
  * username:token
  */
@@ -64,7 +70,7 @@ function fetchRest($remotePath, $account, $repo, $extra) {
     $remoteBase = 'https://api.github.com';
     $remotePath = str_replace($remoteBase, '', $remotePath);
     $remotePath = ltrim($remotePath, '/');
-    if (preg_match('@/[0-9]+$@', $remotePath) || preg_match('@/[0-9]+/files$@', $remotePath)) {
+    if (preg_match('@/[0-9]+$@', $remotePath) || preg_match('@/[0-9]+/files$@', $remotePath) || preg_match('@/branches/[0-9\.]+$@', $remotePath)) {
         // requesting details
         $url = "$remoteBase/${remotePath}";
     } else {
@@ -86,7 +92,7 @@ function fetchRest($remotePath, $account, $repo, $extra) {
     $s = curl_exec($ch);
     curl_close($ch);
     $json = json_decode($s);
-    if (!is_array($json)) {
+    if (!is_array($json) && !is_object($json)) {
         echo "Error fetching data\n";
         return null;
     } else {
@@ -118,15 +124,18 @@ function getComposerLockJson() {
     return $json;
 }
 
-function filterSupportedModules($composerLockJson) {
-    global $supportedAccounts;
+function filterModules($composerLockJson) {
+    global $supportedAccounts, $skipRepos;
     $modules = [];
     foreach ($composerLockJson->packages as $package) {
         $b = preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $package->name, $m);
         array_shift($m);
         list($account, $repo) = $m;
         if (!in_array($account, $supportedAccounts)) {
-            continue;;
+            continue;
+        }
+        if (in_array($repo, $skipRepos)) {
+            continue;
         }
         $modules[] = $package;
     }
@@ -152,7 +161,7 @@ function createCsv($filename, $data, $fields, $maxN = 9999) {
     echo "\nWrote to $filename\n\n";
 }
 
-function getLatestPatchTag($gitTagsJson, $currentTag) {
+function deriveLatestPatch($gitTagsJson, $currentTag) {
     $rx = '#^([0-9]+)\.([0-9]+)\.([0-9]+)$#';
     if (!preg_match($rx, $currentTag, $m)) {
         return 'unknown_current';
@@ -161,21 +170,23 @@ function getLatestPatchTag($gitTagsJson, $currentTag) {
     list($currentMajor, $currentMinor, $currentPatch) = $m;
     // releases are listed DESC
     foreach ($gitTagsJson as $tag) {
-        $name = $tag->name;
-        if (!preg_match($rx, $currentTag, $m)) {
+        if (!preg_match($rx, $tag->name, $m)) {
             continue;
         }
         array_shift($m);
         list($latestMajor, $latestMinor, $latestPatch) = $m;
         if ($currentMajor == $latestMajor && $currentMinor == $latestMinor) {
-            return "$latestMajor.$latestMinor.$latestPatch";
+            return [
+                "$latestMajor.$latestMinor.$latestPatch",
+                $tag->commit->sha
+            ];
         }
     }
     return 'unknown_latest_patch';
 }
 
-function deriveEndpointUrl($name) {
-    preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $name, $m);
+function deriveEndpointUrl($name, $extra) {
+    preg_match('#^([a-zA-Z0-9\-_]+?)/([a-zA-Z0-9\-_]+)$#', $name, $m);
     array_shift($m);
     list($account, $repo) = $m;
     if ($account == 'silverstripe') {
@@ -192,32 +203,87 @@ function deriveEndpointUrl($name) {
             $repo = 'cwp-agencyextensions';
         }
     }
-    $url = "/repos/$account/$repo/tags";
+    if ($account == 'tractorcow' && $repo == 'silverstripe-fluent') {
+        $account = 'tractorcow-farm';
+    }
+    $url = "/repos/$account/$repo/$extra";
     return $url;
-    // /repos/silverstripe/silverstripe-comment-notifications/tags?per_page=100
-    // /repos/silverstripe/silverstripe-vendor-plugin/tags?per_page=100
-    // /repos/symbiote/silverstripe-multivaluefield/tags?per_page=100
-    // /repos/tractorcow/classproxy/tags?per_page=100
+}
+
+function deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha) {
+    $latestSha = $gitBranchJson->commit->sha;
+    // echo $latestPatchSha;
+    // echo "\n";
+    // echo $latestSha;
+    if ($latestSha == $latestPatchSha) {
+        return [false, ''];
+    }
+    $rx = '#^([0-9]+)\.([0-9]+)\.([0-9]+)$#';
+    if (!preg_match($rx, $latestPatchTag, $m)) {
+        return [true, 'unknown_new_patch'];
+    }
+    array_shift($m);
+    list($latestMajor, $latestMinor, $latestPatch) = $m;
+    $newPatch = $latestPatch += 1;
+    return [true, "$latestMajor.$latestMinor.$newPatch"];
 }
 
 function deriveData() {
-    global $updateOnlyModules;
+    global $updateOnlyModules, $useLocalData;
     $composerLockJson = getComposerLockJson();
-    $modules = filterSupportedModules($composerLockJson);
+    $modules = filterModules($composerLockJson);
     $data = [];
     foreach ($modules as $module) {
+
+        // sboyd
+        // if ($module->name != 'symbiote/silverstripe-multivaluefield') continue;
+
+        // derive account and repo
         preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $module->name, $m);
         array_shift($m);
         list($account, $repo) = $m;
-        if ($account == 'cwp') {
-            $account = 'silverstripe';
+        
+        // get latest released version
+        $path = "json/rest-$account-$repo-tags.json";
+        if ($useLocalData && file_exists($path)) {
+            echo "Using local data from $path\n";
+            $gitTagsJson = json_decode(file_get_contents($path));
+        } else {
+            $url = deriveEndpointUrl($module->name, 'tags');
+            $gitTagsJson = fetchRest($url, $account, $repo, 'tags');
         }
-        $url = deriveEndpointUrl($module->name);
-        $gitTagsJson = fetchRest($url, $account, $repo, 'tags');
+        list($latestPatchTag, $latestPatchSha) = deriveLatestPatch($gitTagsJson, $module->version);
+                
+        // see if unreleased changes
+        // silverstripe/admin
+        // current = 1.6.0
+        // latest = 1.6.1
+        // unreleased = probably
+        $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
+        $newPatchTag = 'unknown_new_patch_tag';
+        if (preg_match('#([0-9]+\.[0-9]+)\.[0-9]+#', $latestPatchTag, $m)) {
+            $branch = $m[1];
+            if (preg_match('#^0\.#', $branch)) {
+                $branch = 'master';
+            }
+            $path = "json/rest-$account-$repo-branches-$branch.json";
+            if ($useLocalData && file_exists($path)) {
+                echo "Using local data from $path\n";
+                $gitBranchJson = json_decode(file_get_contents($path));
+            } else {
+                $url = deriveEndpointUrl($module->name, "branches/$branch");
+                $gitBranchJson = fetchRest($url, $account, $repo, "branches-$branch");
+            }
+            list($hasUnreleasedChanges, $newPatchTag) = deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha);
+        }
+
+        // data row
         $data[] = [
             'name' => $module->name,
             'current_tag' => $module->version,
-            'latest_patch_tag' => getLatestPatchTag($gitTagsJson, $module->version),
+            'latest_patch_tag' => $latestPatchTag,
+            'has_unreleased_changes' => $hasUnreleasedChanges,
+            'new_patch_tag' => $newPatchTag,
             'upgrade_only' => in_array($module->name, $updateOnlyModules),
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags'
         ];
@@ -232,14 +298,9 @@ function buildModulesCsv() {
         }
     }
     $data = deriveData();
-    createCsv('csv/modules.csv', $data, [
-        'name',
-        'current_tag',
-        'latest_patch_tag',
-        'upgrade_only',
-        'tags_url'
-    ]);
+    createCsv('csv/modules.csv', $data, array_keys($data[0]));
 }
 
 // accountCounts();
+$useLocalData = true;
 buildModulesCsv();
