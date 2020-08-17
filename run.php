@@ -11,10 +11,26 @@ $supportedAccounts = [
 ];
 
 // We can adopt new tags for these but don't create new tags for them:
+// This list is for a CWP release
 $upgradeOnlyModules = [
     'silverstripe/recipe-core',
+    'silverstripe/assets',
+    'silverstripe/config',
+    'silverstripe/framework',
+    'silverstripe/mimevalidator',
     'silverstripe/recipe-cms',
+    'silverstripe/admin',
+    'silverstripe/asset-admin',
+    'silverstripe/campaign-admin',
+    'silverstripe/versioned-admin',
+    'silverstripe/cms',
+    'silverstripe/errorpage',
+    'silverstripe/graphql',
+    'silverstripe/reports',
+    'silverstripe/siteconfig',
+    'silverstripe/versioned',
     'symbiote/silverstripe-queuedjobs',
+    'dnadesign/silverstripe-elemental-userforms',
 ];
 
 // not relevant for doing a release
@@ -70,7 +86,7 @@ function fetchRest($remotePath, $account, $repo, $extra) {
     $remoteBase = 'https://api.github.com';
     $remotePath = str_replace($remoteBase, '', $remotePath);
     $remotePath = ltrim($remotePath, '/');
-    if (preg_match('@/[0-9]+$@', $remotePath) || preg_match('@/[0-9]+/files$@', $remotePath) || preg_match('@/branches/[0-9\.]+$@', $remotePath)) {
+    if (preg_match('@/[0-9]+$@', $remotePath) || preg_match('@/[0-9]+/files$@', $remotePath) || preg_match('@/branches/[0-9\.]+$@', $remotePath) || preg_match('@/commits/[a-z0-9\.]+$@', $remotePath)) {
         // requesting details
         $url = "$remoteBase/${remotePath}";
     } else {
@@ -210,22 +226,67 @@ function deriveEndpointUrl($name, $extra) {
     return $url;
 }
 
-function deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha) {
-    $latestSha = $gitBranchJson->commit->sha;
-    // echo $latestPatchSha;
-    // echo "\n";
-    // echo $latestSha;
-    if ($latestSha == $latestPatchSha) {
-        return [false, ''];
+function isDevFile($path) {
+    // possiblly should treat .travis.yml and .scrutinizer as 'tooling'
+    return in_array($path, ['.travis.yml', '.scrutinizer.yml', 'composer.lock', 'package.json', 'yarn.lock']);
+}
+
+function deriveShasSinceLatestPatch($gitBranchCommitsJson, $latestPatchSha, $moduleName) {
+    global $useLocalData;
+    $shasSinceLatestPatch = [];
+    $nonConfigShasSinceLastPatch = [];
+
+    foreach ($gitBranchCommitsJson as $commit) {
+        $sha = $commit->sha;
+        if ($sha == $latestPatchSha) {
+            break;
+        }
+
+        // derive account and repo
+        preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $moduleName, $m);
+        array_shift($m);
+        list($account, $repo) = $m;
+
+        // get commit files changes
+        $path = "json/rest-$account-$repo-commits-$sha.json";
+        if ($useLocalData && file_exists($path)) {
+            echo "Using local data from $path\n";
+            $commitJson = json_decode(file_get_contents($path));
+        } else {
+            $url = deriveEndpointUrl($moduleName, "commits/$sha");
+            $commitJson = fetchRest($url, $account, $repo, "commits-$sha");
+        }      
+        $shasSinceLatestPatch[] = $sha;
+        $commitHasNonDevFiles = false;
+        foreach ($commitJson->files ?? [] as $path) {
+            if (!isDevFile($path)) {
+                $commitHasNonDevFiles = true;
+                break;
+            }
+        }
+        if (!$commitHasNonDevFiles) {
+            continue;
+        }
+        $nonConfigShasSinceLastPatch[] = $sha;
+    }
+
+    return [$shasSinceLatestPatch, $nonConfigShasSinceLastPatch];
+}
+
+function deriveNewPatch($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $moduleName) {
+    $latestSha = $gitBranchCommitsJson[0]->sha;
+    list($shasSinceLatestPatch, $nonConfigShasSinceLastPatch) = deriveShasSinceLatestPatch($gitBranchCommitsJson, $latestPatchSha, $moduleName);
+    if (count($nonConfigShasSinceLastPatch) == 0) {
+        return [false, '', '', !empty($shasSinceLatestPatch)];
     }
     $rx = '#^([0-9]+)\.([0-9]+)\.([0-9]+)$#';
     if (!preg_match($rx, $latestPatchTag, $m)) {
-        return [true, 'unknown_new_patch'];
+        return [true, 'unknown_new_patch', $latestSha, false];
     }
     array_shift($m);
     list($latestMajor, $latestMinor, $latestPatch) = $m;
     $newPatch = $latestPatch += 1;
-    return [true, "$latestMajor.$latestMinor.$newPatch"];
+    return [true, "$latestMajor.$latestMinor.$newPatch", $latestSha, false];
 }
 
 function deriveData() {
@@ -236,7 +297,7 @@ function deriveData() {
     foreach ($modules as $module) {
 
         // sboyd
-        // if ($module->name != 'symbiote/silverstripe-multivaluefield') continue;
+        // if ($module->name != 'bringyourownideas/silverstripe-composer-update-checker') continue;
 
         // derive account and repo
         preg_match('#^([a-zA-Z0-9\-_]+)/([a-zA-Z0-9\-_]+)$#', $module->name, $m);
@@ -262,6 +323,9 @@ function deriveData() {
         $upgradeOnly = in_array($module->name, $upgradeOnlyModules);
         $hasUnreleasedChanges = '';
         $newPatchTag = '';
+        $newPatchSha = '';
+        $branch = '';
+        $configOnlyCommitsSinceLastPatch = false;
         if (!$upgradeOnly) {
             $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
             $newPatchTag = 'unknown_new_patch_tag';
@@ -270,18 +334,24 @@ function deriveData() {
                 if (preg_match('#^0\.#', $branch)) {
                     $branch = 'master';
                 }
-                $path = "json/rest-$account-$repo-branches-$branch.json";
+                $path = "json/rest-$account-$repo-commits-$branch.json";
                 if ($useLocalData && file_exists($path)) {
                     echo "Using local data from $path\n";
-                    $gitBranchJson = json_decode(file_get_contents($path));
+                    $gitBranchCommitsJson = json_decode(file_get_contents($path));
                 } else {
-                    $url = deriveEndpointUrl($module->name, "branches/$branch");
-                    $gitBranchJson = fetchRest($url, $account, $repo, "branches-$branch");
+                    $url = deriveEndpointUrl($module->name, "commits?sha=$branch");
+                    $gitBranchCommitsJson = fetchRest($url, $account, $repo, "commits-$branch");
                 }
-                list($hasUnreleasedChanges, $newPatchTag) = deriveNewPatch($gitBranchJson, $latestPatchTag, $latestPatchSha);
+                list($hasUnreleasedChanges, $newPatchTag, $newPatchSha, $configOnlyCommitsSinceLastPatch) = deriveNewPatch($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $module->name);
             }
         }
 
+        // compare url
+        $compareUrl = '';
+        if ($branch && $newPatchTag) {
+            $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestPatchSha...$newPatchSha";
+        }
+        
         // data row
         $data[] = [
             'name' => $module->name,
@@ -289,7 +359,9 @@ function deriveData() {
             'latest_patch_tag' => $latestPatchTag,
             'upgrade_only' => $upgradeOnly,
             'has_unreleased_changes' => $hasUnreleasedChanges,
+            'config_only_commits_since_last_patch' => $configOnlyCommitsSinceLastPatch,
             'new_patch_tag' => $newPatchTag,
+            'compare_url' => $compareUrl,
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags'
         ];
     }
