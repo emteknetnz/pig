@@ -1,3 +1,9 @@
+## Summary
+
+Pig is a program to supplement Cow.  It's used to work out which modules in a cwp-recipe-kitchen-sink installation need to have new modules released.
+
+## Usage
+
 .credentials:
 ```
 user=mygithubuser
