@@ -4,14 +4,20 @@ Pig is a program to supplement Cow.  It's used to work out which modules in a cw
 
 ## Usage
 
+```
+git clone git@github.com:emteknetnz/pig.git
+cd pig
+touch .credentials && edit .credentials
+```
+
 .credentials:
 ```
 user=mygithubuser
 token=abcdef123456abcdef123456abcdef123456abcd
 ```
 
-Generate the latest composer.lock
-`composer create-project cwp/cwp-recipe-kitchen-sink:2.6.0`
+Generate the composer.lock from the LATEST TAG on kitchen sink
+`composer create-project cwp/cwp-recipe-kitchen-sink:2.6.1`
 
 Run the script
 `php run.php`
