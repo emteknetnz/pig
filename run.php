@@ -273,8 +273,13 @@ function isDevFile($path) {
     return in_array($path, ['.travis.yml', '.scrutinizer.yml', 'composer.lock', 'package.json', 'yarn.lock']);
 }
 
-function deriveNewPatch($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $moduleName) {
+function deriveNewTag($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $moduleName, $tagType) {
     global $useLocalData, $alwaysReleaseModulesWithRC;
+    
+    if (!is_array($gitBranchCommitsJson)) {
+        return [false, 'unknown_new_patch', 'unknown', 'unknown'];
+    }
+
     $latestSha = $gitBranchCommitsJson[0]->sha;
         
     // derive account and repo
@@ -306,11 +311,22 @@ function deriveNewPatch($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha,
     }
     array_shift($m);
     list($latestMajor, $latestMinor, $latestPatch) = $m;
-    $newPatch = $latestPatch += 1;
-    if (in_array($moduleName, $alwaysReleaseModulesWithRC)) {
-        $newPatch .= '-rc1';
+    $newMajor = $latestMajor;
+    $newMinor = $latestMinor;
+    $newPatch = $latestPatch;
+    if ($tagType == 'patch') {
+        $newPatch = $latestPatch += 1;
+        if (in_array($moduleName, $alwaysReleaseModulesWithRC)) {
+            $newPatch .= '-rc1';
+        }
+    } else { // minor
+        $newMinor = $latestMinor += 1;
+        $newPatch = 0;
+        if (in_array($moduleName, $alwaysReleaseModulesWithRC)) {
+            $newPatch .= '-rc1';
+        }
     }
-    return [true, "$latestMajor.$latestMinor.$newPatch", $latestSha, $devOnlyCommitsSinceLastPatch];
+    return [true, "$newMajor.$newMinor.$newPatch", $latestSha, $devOnlyCommitsSinceLastPatch];
 }
 
 function deriveData() {
@@ -339,64 +355,82 @@ function deriveData() {
         }
         list($latestPatchTag, $latestPatchSha) = deriveLatestPatch($gitTagsJson, $module->version);
                 
-        // see if unreleased changes
-        // silverstripe/admin
-        // current = 1.6.0
-        // latest = 1.6.1
-        // unreleased = probably
         $upgradeOnly = in_array($module->name, $upgradeOnlyModules);
-        $hasUnreleasedChanges = '';
-        $newPatchTag = '';
-        $newPatchSha = '';
-        $branch = '';
-        $devOnlyCommitsSinceLastPatch = false;
-        if (!$upgradeOnly) {
-            $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
-            $newPatchTag = 'unknown_new_patch_tag';
-            if (preg_match('#([0-9]+\.[0-9]+)\.[0-9]+#', $latestPatchTag, $m)) {
-                $branch = $m[1];
-                if (preg_match('#^0\.#', $branch)) {
-                    $branch = 'master';
-                }
-                $path = "json/rest-$account-$repo-commits-$branch.json";
-                if ($useLocalData && file_exists($path)) {
-                    echo "Using local data from $path\n";
-                    $gitBranchCommitsJson = json_decode(file_get_contents($path));
-                } else {
-                    $url = deriveEndpointUrl($module->name, "commits?sha=$branch");
-                    $gitBranchCommitsJson = fetchRest($url, $account, $repo, "commits-$branch");
-                }
-                list($hasUnreleasedChanges, $newPatchTag, $newPatchSha, $devOnlyCommitsSinceLastPatch) = deriveNewPatch($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $module->name);
-            }
-        }
 
-        // compare url
-        $compareUrl = '';
-        if ($branch && $newPatchTag) {
-            $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestPatchSha...$newPatchSha";
-        }
-
-        $usePatchTag = $latestPatchTag;
-        if ($hasUnreleasedChanges && !$upgradeOnly && !$devOnlyCommitsSinceLastPatch && $newPatchTag) {
-            $usePatchTag = $newPatchTag;
-        }
-        if (in_array($module->name, $alwaysReleaseModulesWithRC)) {
-            $usePatchTag = $newPatchTag;
-        }
-        
         // data row
-        $data[] = [
+        $row = [
             'name' => $module->name,
             'current_tag' => $module->version,
             'latest_patch_tag' => $latestPatchTag,
             'upgrade_only' => $upgradeOnly,
-            'has_unreleased_changes' => $hasUnreleasedChanges,
-            'dev_only_commits_since_last_patch' => $devOnlyCommitsSinceLastPatch,
-            'new_patch_tag' => ($upgradeOnly || $devOnlyCommitsSinceLastPatch) ? '' : $newPatchTag,
-            'use_patch_tag' => $usePatchTag,
-            'compare_url' => $compareUrl,
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags'
         ];
+
+        foreach (['patch', 'minor'] as $tagType) {
+            // see if unreleased changes
+            // silverstripe/admin
+            // current = 1.6.0
+            // latest = 1.6.1
+            // unreleased = probably
+            $hasUnreleasedChanges = '';
+            $newPatchTag = '';
+            $newPatchSha = '';
+            $branch = '';
+            $devOnlyCommitsSinceLastPatch = false;
+            if (!$upgradeOnly) {
+                $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
+                $newPatchTag = 'unknown_new_patch_tag';
+
+                if ($tagType == 'patch') {
+                    $rx = '#([0-9]+\.[0-9]+)\.[0-9]+#';
+                } else { // minor
+                    $rx = '#([0-9])+\.[0-9]+\.[0-9]+#';
+                }
+
+                if (preg_match($rx, $latestPatchTag, $m)) {
+                    $branch = $m[1];
+                    if ($tagType == 'patch') {
+                        $rx = '#^0\.#';
+                    } else { // minor
+                        $rx = '#^0$#';
+                    }
+                    if (preg_match($rx, $branch)) {
+                        $branch = 'master';
+                    }
+                    $path = "json/rest-$account-$repo-commits-$branch.json";
+                    if ($useLocalData && file_exists($path)) {
+                        echo "Using local data from $path\n";
+                        $gitBranchCommitsJson = json_decode(file_get_contents($path));
+                    } else {
+                        $url = deriveEndpointUrl($module->name, "commits?sha=$branch");
+                        $gitBranchCommitsJson = fetchRest($url, $account, $repo, "commits-$branch");
+                    }
+                    list($hasUnreleasedChanges, $newPatchTag, $newPatchSha, $devOnlyCommitsSinceLastPatch) = deriveNewTag($gitBranchCommitsJson, $latestPatchTag, $latestPatchSha, $module->name, $tagType);
+                }
+            }
+
+            // compare url
+            $compareUrl = '';
+            if ($branch && $newPatchTag) {
+                $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestPatchSha...$newPatchSha";
+            }
+
+            $usePatchTag = $latestPatchTag;
+            if ($hasUnreleasedChanges && !$upgradeOnly && !$devOnlyCommitsSinceLastPatch && $newPatchTag) {
+                $usePatchTag = $newPatchTag;
+            }
+            if (in_array($module->name, $alwaysReleaseModulesWithRC)) {
+                $usePatchTag = $newPatchTag;
+            }
+
+            $row[$tagType . '_has_unreleased_changes'] = $hasUnreleasedChanges;
+            $row[$tagType . '_dev_only_commits_since_last_patch'] = $devOnlyCommitsSinceLastPatch;
+            $row[$tagType . '_new_patch_tag'] = ($upgradeOnly || $devOnlyCommitsSinceLastPatch) ? '' : $newPatchTag;
+            $row[$tagType . '_use_patch_tag'] = $usePatchTag;
+            $row[$tagType . '_compare_url'] = $compareUrl;
+            $row[$tagType . '_tags_url'] = str_replace('.git', '', $module->source->url) . '/tags';
+        }
+        $data[] = $row;
     }
     return $data;
 }
