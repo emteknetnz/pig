@@ -61,7 +61,35 @@ function deriveEndpointUrl($name, $extra)
 function isDevFile($path)
 {
     // possiblly should treat .travis.yml and .scrutinizer as 'tooling'
-    return in_array($path, ['.travis.yml', '.scrutinizer.yml', 'composer.lock', 'package.json', 'yarn.lock']);
+    return in_array($path, [
+        '.codeclimate.yml',
+        '.codecov.yml',
+        '.cow.json',
+        '.editorconfig',
+        '.eslintignore',
+        '.eslintrc',
+        '.eslintrc.js',
+        '.gitattributes',
+        '.gitignore',
+        '.nvmrc',
+        '.sass-lint.yml',
+        '.scrutinizer.yml',
+        '.ss-strorybook.js',
+        '.travis.yml',
+        'behat.yml',
+        'code-of-conduct.md',
+        'contributing.md',
+        'CONTRIBUTING.md',
+        'composer.lock',
+        'package.json',
+        'phpcs.xml',
+        'phpcs.xml.dist',
+        'phpunit.xml',
+        'phpunit.xml.dist',
+        'SUPPORT.md',
+        'webpack.config.js',
+        'yarn.lock',
+    ]);
 }
 
 /**
