@@ -19,8 +19,11 @@ token=abcdef123456abcdef123456abcdef123456abcd
 Generate the composer.lock from the LATEST TAG on kitchen sink
 `composer create-project cwp/cwp-recipe-kitchen-sink:2.6.1`
 
-Run the script
-`php run.php`
+If doing a patch release:
+`php run.php patch`
+
+If doing a minor release:
+`php run.php minor`
 
 Pig will read composer.lock from the installed kitchen-sink and work out which modules need to have new versions released
 
