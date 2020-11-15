@@ -8,7 +8,11 @@ Cow is only able to do a single tag per module, so you EITHER:
 
 You CAN NOT tag BOTH a new patch version AND a new minor version
 
-Whether you use the new patch tag or the new minor version depends on whether you are doing a patch or minor release
+Whether you use the new patch tag or the new minor version depends on:
+- if you are doing a patch release, only do release patch tags
+- if you are doing a minor release it will default to minor tags, though you should manually check these to see if
+  they should be reduced to a patch tag.  This step requires a human to view the compare urls to see if a patch
+  tag is more appropriate, though if you end up with a minor (default) it's not the end of the world
 */
 
 // Read first argument to see if doing patch|minor release
@@ -21,7 +25,6 @@ if ($releaseType != 'patch' && $releaseType != 'minor') {
     echo "php run.php minor\n";
     die;
 }
-
 
 include 'modules.php';
 include 'functions.php';
@@ -137,7 +140,7 @@ function deriveLatestTagItems($gitTagsJson, $currentTag, $releaseType)
  * - $latestSha
  * - $devOnlyCommitsSinceLastTag
  */
-function deriveNewTag($gitBranchCommitsJson, $latestTag, $latestTagSha, $moduleName)
+function deriveNewTag($gitBranchCommitsJson, $latestTag, $latestTagSha, $moduleName, $tagType)
 {
     global $useLocalData, $alwaysReleaseModulesWithRC, $releaseType;
     
@@ -179,12 +182,12 @@ function deriveNewTag($gitBranchCommitsJson, $latestTag, $latestTagSha, $moduleN
     $newMajor = $latestMajor;
     $newMinor = $latestMinor;
     $newPatch = $latestPatch;
-    if ($releaseType == 'patch') {
+    if ($tagType == 'patch') {
         $newPatch = $latestPatch += 1;
         if (in_array($moduleName, $alwaysReleaseModulesWithRC)) {
             $newPatch .= '-rc1';
         }
-    } elseif ($releaseType == 'minor') {
+    } elseif ($tagType == 'minor') {
         $newMinor = $latestMinor += 1;
         $newPatch = 0;
         if (in_array($moduleName, $alwaysReleaseModulesWithRC)) {
@@ -221,70 +224,84 @@ function deriveData($releaseType)
         list($latestTag, $latestTagSha) = deriveLatestTagItems($gitTagsJson, $module->version, $releaseType);
         $upgradeOnly = in_array($module->name, $upgradeOnlyModules);
 
-        $hasUnreleasedChanges = '';
-        $newTag = '';
-        $latestSha = '';
-        $branch = '';
-        $devOnlyCommitsSinceLastTag = false;
-        if (!$upgradeOnly) {
-            $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
-            $newTag = 'unknown_new_tag';
-
-            if ($releaseType == 'patch') {
-                $rx = '#([0-9]+\.[0-9]+)\.[0-9]+(\-beta1|\-beta2|\-rc1|\-rc2|)#';
-            } else { // minor
-                $rx = '#([0-9])+\.[0-9]+\.[0-9]+(\-beta1|\-beta2|\-rc1|\-rc2|)#';
-            }
-
-            if (preg_match($rx, $latestTag, $m)) {
-                $branch = $m[1];
-                if ($releaseType == 'patch') {
-                    $rx = '#^0\.#';
-                } else { // minor
-                    $rx = '#^0$#';
-                }
-                if (preg_match($rx, $branch)) {
-                    $branch = 'master';
-                }
-                $path = "json/rest-$account-$repo-commits-$branch.json";
-                if ($useLocalData && file_exists($path)) {
-                    echo "Using local data from $path\n";
-                    $gitBranchCommitsJson = json_decode(file_get_contents($path));
-                } else {
-                    $url = deriveEndpointUrl($module->name, "commits?sha=$branch");
-                    $gitBranchCommitsJson = fetchRest($url, $account, $repo, "commits-$branch");
-                }
-                $arr = deriveNewTag($gitBranchCommitsJson, $latestTag, $latestTagSha, $module->name);
-                list($hasUnreleasedChanges, $newTag, $latestSha, $devOnlyCommitsSinceLastTag) = $arr;
-            }
-        }
-
-        // compare url
-        $compareUrl = '';
-        if ($branch && $newTag) {
-            $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestTagSha...$latestSha";
-        }
-
-        $useTag = $latestTag;
-        if ($hasUnreleasedChanges && !$upgradeOnly && !$devOnlyCommitsSinceLastTag && $newTag) {
-            $useTag = $newTag;
-        }
-        if (in_array($module->name, $alwaysReleaseModulesWithRC)) {
-            $useTag = $newTag;
-        }
-
-        $data[] = [
+        $row = [
             'name' => $module->name,
             'current_tag' => $module->version,
-            'latest_tag' => $latestTag,
-            'upgrade_only' => $upgradeOnly,
-            'has_unreleased_changes' => $hasUnreleasedChanges,
-            'dev_only_commits_since_last_tag' => $devOnlyCommitsSinceLastTag,
-            'new_tag' => ($upgradeOnly || $devOnlyCommitsSinceLastTag) ? '' : $newTag,
-            'use_tag' => $useTag,
-            'compare_url' => $compareUrl,
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags',
+            'latest_tag' => $latestTag,
+            'upgrade_only' => $upgradeOnly
         ];
+
+        $tagTypes = [$releaseType];
+        if ($releaseType == 'minor') {
+            array_unshift($tagTypes, 'patch');
+        }
+
+        $useTag = '';
+        foreach ($tagTypes as $tagType) {
+            $hasUnreleasedChanges = '';
+            $newTag = '';
+            $latestSha = '';
+            $branch = '';
+            $devOnlyCommitsSinceLastTag = false;
+            if (!$upgradeOnly) {
+                $hasUnreleasedChanges = 'unknown_has_unreleased_changes';
+                $newTag = 'unknown_new_tag';
+
+                if ($tagType == 'patch') {
+                    $rx = '#([0-9]+\.[0-9]+)\.[0-9]+(\-beta1|\-beta2|\-rc1|\-rc2|)#';
+                } else { // minor
+                    $rx = '#([0-9])+\.[0-9]+\.[0-9]+(\-beta1|\-beta2|\-rc1|\-rc2|)#';
+                }
+
+                if (preg_match($rx, $latestTag, $m)) {
+                    $branch = $m[1];
+                    if ($tagType == 'patch') {
+                        $rx = '#^0\.#';
+                    } else { // minor
+                        $rx = '#^0$#';
+                    }
+                    if (preg_match($rx, $branch)) {
+                        $branch = 'master';
+                    }
+                    $path = "json/rest-$account-$repo-commits-$branch.json";
+                    if ($useLocalData && file_exists($path)) {
+                        echo "Using local data from $path\n";
+                        $gitBranchCommitsJson = json_decode(file_get_contents($path));
+                    } else {
+                        $url = deriveEndpointUrl($module->name, "commits?sha=$branch");
+                        $gitBranchCommitsJson = fetchRest($url, $account, $repo, "commits-$branch");
+                    }
+                    $arr = deriveNewTag($gitBranchCommitsJson, $latestTag, $latestTagSha, $module->name, $tagType);
+                    list($hasUnreleasedChanges, $newTag, $latestSha, $devOnlyCommitsSinceLastTag) = $arr;
+                }
+            }
+            
+            // compare url
+            $compareUrl = '';
+            if ($branch && $newTag) {
+                // $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestTagSha...$latestSha";
+                $compareUrl = str_replace('.git', '', $module->source->url) . "/compare/$latestTag...$branch";
+            }
+
+            $useTag = $latestTag;
+            if ($hasUnreleasedChanges && !$upgradeOnly && !$devOnlyCommitsSinceLastTag && $newTag) {
+                $useTag = $newTag;
+            }
+            if (in_array($module->name, $alwaysReleaseModulesWithRC)) {
+                $useTag = $newTag;
+            }
+
+            $row[$tagType . '_has_unreleased_changes'] = $hasUnreleasedChanges;
+            $row[$tagType . '_dev_only_commits_since_last_tag'] = $devOnlyCommitsSinceLastTag;
+            $row[$tagType . '_new_tag'] = ($upgradeOnly || $devOnlyCommitsSinceLastTag) ? '' : $newTag;
+            $row[$tagType . '_compare_url'] = $compareUrl;
+
+        }
+
+        // for a minor release, use_tag will default to minor
+        $row['use_tag'] = $useTag;
+        $data[] = $row;
     }
     return $data;
 }
