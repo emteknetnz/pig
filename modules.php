@@ -13,6 +13,8 @@ $supportedAccounts = [
 // We can adopt new tags for these but don't create new tags for them:
 // This list is for a CWP release
 $upgradeOnlyModules = [
+
+    // core release is done seperately before a cwp release
     'silverstripe/recipe-cms',
     'silverstripe/recipe-core',
     'silverstripe/assets',
@@ -31,18 +33,21 @@ $upgradeOnlyModules = [
     'silverstripe/siteconfig',
     'silverstripe/versioned',
 
-    # these are in .cow.json
-    'symbiote/silverstripe-queuedjobs',
+    # These are in .cow.json
+    # https://github.com/silverstripe/cwp-recipe-kitchen-sink/blob/2/.cow.json
     "dnadesign/silverstripe-elemental-subsites",
     'dnadesign/silverstripe-elemental-userforms',
     "undefinedoffset/sortablegridfield",
+    "tractorcow/classproxy",
+    "tractorcow/silverstripe-fluent",
+    "tractorcow/silverstripe-proxy-db",
 
     // upgrade only for core as well if included
+    // (I'm not sure where these came, have raised PR to get into .cow.json
+    //  https://github.com/silverstripe/cwp-recipe-kitchen-sink/pull/77/files)
     'silverstripe/lumberjack',
     'symbiote/silverstripe-gridfieldextensions',
     'symbiote/silverstripe-multivaluefield',
-    'tractorcow/classproxy',
-    'tractorcow/silverstripe-proxy-db',
 ];
 
 // applicable to cwp patch release
