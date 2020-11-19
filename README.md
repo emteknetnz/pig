@@ -56,5 +56,5 @@ In each data cell for the column "manual_tag_type", type in either `patch` or `n
 In each data cell for the column "manual_tag_type", type in either `patch`, `minor` or `none`.
 
 ## Importing plan data from pig into cow
-When modifying the cow plan in your terminal, manually enter the values from the data cells from the final two columns
-`cow_new_version` and `cow_prior_version`.
+When modifying the cow plan in your terminal, manually enter the values from the data cells from the final three
+columns `cow_module`, `cow_new_version` and `cow_prior_version`.
