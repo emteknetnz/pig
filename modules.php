@@ -35,19 +35,18 @@ $upgradeOnlyModules = [
 
     # These are in .cow.json
     # https://github.com/silverstripe/cwp-recipe-kitchen-sink/blob/2/.cow.json
-    "dnadesign/silverstripe-elemental-subsites",
-    'dnadesign/silverstripe-elemental-userforms',
-    "undefinedoffset/sortablegridfield",
-    "tractorcow/classproxy",
+    "dnadesign/silverstripe-elemental-userforms",
+    "silverstripe/subsites",
     "tractorcow/silverstripe-fluent",
-    "tractorcow/silverstripe-proxy-db",
 
-    // upgrade only for core as well if included
-    // (I'm not sure where these came, have raised PR to get into .cow.json
-    //  https://github.com/silverstripe/cwp-recipe-kitchen-sink/pull/77/files)
+    // manual list of loose dependencies not to release new tags for
     'silverstripe/lumberjack',
     'symbiote/silverstripe-gridfieldextensions',
     'symbiote/silverstripe-multivaluefield',
+    "dnadesign/silverstripe-elemental-subsites",
+    "undefinedoffset/sortablegridfield",
+    "tractorcow/classproxy",
+    "tractorcow/silverstripe-proxy-db",
 ];
 
 // applicable to cwp patch release
