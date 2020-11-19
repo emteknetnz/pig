@@ -13,7 +13,10 @@ cd pig
 touch .credentials && edit .credentials
 ```
 
-You need to create a Github API [access token](https://github.com/settings/tokens) and add it to the .credentials file
+You need to create a Github API [access token](https://github.com/settings/tokens) and add it to the .credentials file.
+This token should have the following checkboxes ticked:
+- repo:status
+- public_repo
 
 .credentials:
 ```
