@@ -15,6 +15,9 @@ Whether you use the new patch tag or the new minor version depends on:
   tag is more appropriate, though if you end up with a minor (default) it's not the end of the world
 */
 
+include 'modules.php';
+include 'functions.php';
+
 // Read first argument to see if doing patch|minor release
 //    
 $releaseType = $argv[1] ?? '';
@@ -35,11 +38,9 @@ if (isset($argv[2]) && ($argv[2] == '-l' || $argv[2] == '--local')) {
     $useLocalData = true;
 }
 if (!$useLocalData) {
+    echo "Deleting old json files\n";
     deleteJsonFiles('/^rest\-.+?.json$/');
 }
-
-include 'modules.php';
-include 'functions.php';
 
 /**
  * 
