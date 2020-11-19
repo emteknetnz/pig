@@ -1,7 +1,9 @@
 ## Summary
 
-Pig is a program to supplement Cow.  It's used to help plan which modules in a cwp-recipe-kitchen-sink installation need
-to have new modules released.  It also shows the prior versions used.
+Pig is a program to supplement Cow and does the following:
+- helps work out which modules need to have a new patch tag, minor tag, or stay on the existing tag
+- provides github compare urls which shows the diff for a patch tag and for a minor tag
+- shows the prior tag modules are on - meaning the tag used for the last release
 
 ## Usage
 
@@ -11,13 +13,16 @@ cd pig
 touch .credentials && edit .credentials
 ```
 
+You need to create a Github API [access token](https://github.com/settings/tokens) and add it to the .credentials file
+
 .credentials:
 ```
 user=mygithubuser
 token=abcdef123456abcdef123456abcdef123456abcd
 ```
 
-Generate the composer.lock from the LATEST TAG on kitchen sink
+Install kitchen sink in the same directory as pig using the LATEST TAG.  This is done to generate a composer.lock
+file which is used to get information on the last tag used for all the modules.
 `composer create-project cwp/cwp-recipe-kitchen-sink:2.6.1`
 
 If doing a patch release:
@@ -26,11 +31,7 @@ If doing a patch release:
 If doing a minor release:
 `php run.php minor`
 
-Pig will read composer.lock from the installed kitchen-sink and work out which modules need to have new versions
-released
-
-Outputs to
-csv/modules.csv
+This will output a new csv in `csv/modules.csv`
 
 ## Importing csv into a google spreadsheet
 
