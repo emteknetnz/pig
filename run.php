@@ -17,13 +17,25 @@ Whether you use the new patch tag or the new minor version depends on:
 
 // Read first argument to see if doing patch|minor release
 //    
-$releaseType = $argv[1];
+$releaseType = $argv[1] ?? '';
 if ($releaseType != 'patch' && $releaseType != 'minor') {
     echo "Release must be either 'patch' or 'minor'\n";
     echo "Usage:\n";
     echo "php run.php patch\n";
     echo "php run.php minor\n";
+    echo "\n";
+    echo "To use cached local data (useful for pig development):\n";
+    echo "php run.php patch -l (or --local)\n";
+    echo "php run.php minor -l (or --local)\n";
     die;
+}
+
+$useLocalData = false;
+if (isset($argv[2]) && ($argv[2] == '-l' || $argv[2] == '--local')) {
+    $useLocalData = true;
+}
+if (!$useLocalData) {
+    deleteJsonFiles('/^rest\-.+?.json$/');
 }
 
 include 'modules.php';
@@ -303,7 +315,7 @@ function deriveData($releaseType)
         //$row['use_tag'] = $useTag;
         // (^ better to get a human to determine this)
         
-        $row['manual_tag_type'] = $upgradeOnly ? 'none' : ''; // patch|minor|none
+        $row['manual_tag_type'] = $upgradeOnly ? 'none' : ($releaseType == 'minor' && in_array($module->name, $alwaysReleaseModulesWithRC) ? 'minor' : ''); // patch|minor|none
         $row['cow_module'] = $module->name;
         $row['cow_new_version'] = ''; // spreadsheet function
         $row['cow_prior_version'] = $module->version;
@@ -328,6 +340,4 @@ function buildModulesCsv()
     createCsv('csv/modules.csv', $data, array_keys($data[0]));
 }
 
-// accountCounts();
-$useLocalData = true;
 buildModulesCsv();

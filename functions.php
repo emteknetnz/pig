@@ -164,3 +164,15 @@ function createCsv($filename, $data, $fields, $maxN = 9999)
     file_put_contents($filename, $output);
     echo "\nWrote to $filename\n\n";
 }
+
+/**
+ * 
+ */
+function deleteJsonFiles($rx) {
+    foreach (scandir('json') as $filename) {
+        if (!preg_match($rx, $filename)) {
+            continue;
+        }
+        unlink("json/$filename");
+    }
+}
