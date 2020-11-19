@@ -226,7 +226,7 @@ function deriveData($releaseType)
 
         $row = [
             'name' => $module->name,
-            'current_tag' => $module->version,
+            'prior_tag' => $module->version,
             'tags_url' => str_replace('.git', '', $module->source->url) . '/tags',
             'latest_tag' => $latestTag,
             'upgrade_only' => $upgradeOnly
@@ -293,14 +293,21 @@ function deriveData($releaseType)
             }
 
             $row[$tagType . '_has_unreleased_changes'] = $hasUnreleasedChanges;
-            $row[$tagType . '_dev_only_commits_since_last_tag'] = $devOnlyCommitsSinceLastTag;
+            // $row[$tagType . '_dev_only_commits_since_last_tag'] = $devOnlyCommitsSinceLastTag;
+            // (^ kind of useless, I ended up just manually checking everything anyway)
             $row[$tagType . '_new_tag'] = ($upgradeOnly || $devOnlyCommitsSinceLastTag) ? '' : $newTag;
             $row[$tagType . '_compare_url'] = $compareUrl;
-
         }
 
         // for a minor release, use_tag will default to minor
-        $row['use_tag'] = $useTag;
+        //$row['use_tag'] = $useTag;
+        // (^ better to get a human to determine this)
+        
+        $row['manual_tag_type'] = $upgradeOnly ? 'none' : ''; // patch|minor|none
+        $row['cow_module'] = $module->name;
+        $row['cow_new_version'] = ''; // spreadsheet function
+        $row['cow_prior_version'] = $module->version;
+
         $data[] = $row;
     }
     return $data;
